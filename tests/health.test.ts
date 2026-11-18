@@ -37,6 +37,8 @@ describe('Health Endpoint & Preflight Probing', () => {
       const config: AppConfig = {
         port: 3000,
         databasePath: dbPath,
+        sessionSecret: 'test_secret_key_at_least_32_characters_long_12345',
+        sessionTtlDays: 7,
       };
 
       const { statusCode, payload } = await computeHealth(db, config);
@@ -60,6 +62,8 @@ describe('Health Endpoint & Preflight Probing', () => {
     const config: AppConfig = {
       port: 3000,
       databasePath: dbPath,
+      sessionSecret: 'test_secret_key_at_least_32_characters_long_12345',
+      sessionTtlDays: 7,
     };
 
     const { statusCode, payload } = await computeHealth(db, config);
@@ -106,6 +110,8 @@ describe('Health Endpoint & Preflight Probing', () => {
         jellyfinUrl: `http://127.0.0.1:${jfPort}`,
         seerrUrl: `http://127.0.0.1:${seerrPort}`,
         seerrApiKey: 'test-api-key',
+        sessionSecret: 'test_secret_key_at_least_32_characters_long_12345',
+        sessionTtlDays: 7,
       };
 
       const { statusCode, payload } = await computeHealth(db, config);
@@ -143,6 +149,8 @@ describe('Health Endpoint & Preflight Probing', () => {
         jellyfinUrl: 'http://127.0.0.1:1', // Connection refused
         seerrUrl: `http://127.0.0.1:${brokenPort}`, // 401 Unauthorized
         seerrApiKey: SECRET_KEY,
+        sessionSecret: 'test_secret_key_at_least_32_characters_long_12345',
+        sessionTtlDays: 7,
       };
 
       const { statusCode, payload } = await computeHealth(db, config);
@@ -172,6 +180,8 @@ describe('Health Endpoint & Preflight Probing', () => {
       const config: AppConfig = {
         port: 3000,
         databasePath: dbPath,
+        sessionSecret: 'test_secret_key_at_least_32_characters_long_12345',
+        sessionTtlDays: 7,
       };
 
       const server = http.createServer(async (req, res) => {

@@ -4,6 +4,8 @@ import { createDb } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
 import { checkServicesPreflight } from './health/preflight.js';
 import { handleHealthRequest } from './health/router.js';
+import { handleAuthRequest } from './auth/router.js';
+import { handleUsersRequest } from './users/router.js';
 import { registerShutdownHandlers } from './server/shutdown.js';
 
 export async function bootstrap() {
@@ -42,14 +44,15 @@ export async function bootstrap() {
     }${services.seerr.error ? ` [${services.seerr.error}]` : ''}`
   );
 
-  // 4. HTTP Server
+  // 4. HTTP Server Dispatcher
   const server = http.createServer(async (req, res) => {
     try {
-      const handled = await handleHealthRequest(req, res, db, config);
-      if (!handled) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not Found' }));
-      }
+      if (await handleHealthRequest(req, res, db, config)) return;
+      if (await handleAuthRequest(req, res, db, config)) return;
+      if (await handleUsersRequest(req, res, db, config)) return;
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not Found' }));
     } catch (err) {
       console.error('Unhandled request error:', err);
       if (!res.headersSent) {

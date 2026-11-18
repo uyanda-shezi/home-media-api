@@ -10,6 +10,9 @@ describe('Configuration Loader', () => {
     assert.strictEqual(config.jellyfinUrl, undefined);
     assert.strictEqual(config.seerrUrl, undefined);
     assert.strictEqual(config.seerrApiKey, undefined);
+    assert.strictEqual(typeof config.sessionSecret, 'string');
+    assert.ok(config.sessionSecret.length >= 32);
+    assert.strictEqual(config.sessionTtlDays, 7);
   });
 
   it('parses valid environment variables', () => {
@@ -19,6 +22,8 @@ describe('Configuration Loader', () => {
       JELLYFIN_URL: 'https://jellyfin.local',
       SEERR_URL: 'https://seerr.local',
       SEERR_API_KEY: 'test-key',
+      SESSION_SECRET: 'custom_secret_key_that_is_at_least_32_characters_long',
+      SESSION_TTL_DAYS: '14',
     });
 
     assert.strictEqual(config.port, 8080);
@@ -26,6 +31,8 @@ describe('Configuration Loader', () => {
     assert.strictEqual(config.jellyfinUrl, 'https://jellyfin.local');
     assert.strictEqual(config.seerrUrl, 'https://seerr.local');
     assert.strictEqual(config.seerrApiKey, 'test-key');
+    assert.strictEqual(config.sessionSecret, 'custom_secret_key_that_is_at_least_32_characters_long');
+    assert.strictEqual(config.sessionTtlDays, 14);
   });
 
   it('throws an error on invalid port numbers', () => {
@@ -33,5 +40,30 @@ describe('Configuration Loader', () => {
     assert.throws(() => loadConfig({ PORT: '-1' }), /Invalid PORT/);
     assert.throws(() => loadConfig({ PORT: '70000' }), /Invalid PORT/);
     assert.throws(() => loadConfig({ PORT: '0' }), /Invalid PORT/);
+  });
+
+  it('validates SESSION_SECRET in production mode', () => {
+    // Missing or short secret in production must throw
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'production' }),
+      /SESSION_SECRET must be at least 32 characters long in production/
+    );
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'too_short' }),
+      /SESSION_SECRET must be at least 32 characters long in production/
+    );
+
+    // Valid secret in production passes
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'production_secret_key_at_least_32_characters_long_12345',
+    });
+    assert.strictEqual(config.sessionSecret, 'production_secret_key_at_least_32_characters_long_12345');
+  });
+
+  it('throws an error on invalid SESSION_TTL_DAYS', () => {
+    assert.throws(() => loadConfig({ SESSION_TTL_DAYS: 'not-a-number' }), /Invalid SESSION_TTL_DAYS/);
+    assert.throws(() => loadConfig({ SESSION_TTL_DAYS: '0' }), /Invalid SESSION_TTL_DAYS/);
+    assert.throws(() => loadConfig({ SESSION_TTL_DAYS: '-5' }), /Invalid SESSION_TTL_DAYS/);
   });
 });

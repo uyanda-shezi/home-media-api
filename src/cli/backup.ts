@@ -2,8 +2,8 @@ import Database from 'better-sqlite3';
 import { mkdir, rename, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createDb } from '../src/db/connection.js';
-import { loadConfig } from '../src/config.js';
+import { createDb } from '../db/connection.js';
+import { loadConfig } from '../config.js';
 
 export async function performBackup(
   db: Database.Database,

@@ -4,8 +4,8 @@ import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDb } from '../src/db/connection.js';
 import { runMigrations } from '../src/db/migrate.js';
-import { performBackup } from '../scripts/backup.js';
-import { verifyBackup, findLatestBackup } from '../scripts/verify-backup.js';
+import { performBackup } from '../src/cli/backup.js';
+import { verifyBackup, findLatestBackup } from '../src/cli/verify-backup.js';
 
 describe('Atomic Backup & Restore Verification', () => {
   const testDir = join(process.cwd(), 'tmp-test-backup');
