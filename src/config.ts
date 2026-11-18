@@ -2,6 +2,7 @@ export interface AppConfig {
   port: number;
   databasePath: string;
   jellyfinUrl?: string;
+  jellyfinPublicUrl?: string;
   seerrUrl?: string;
   seerrApiKey?: string;
   sessionSecret: string;
@@ -20,6 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const databasePath = env.DATABASE_PATH || './data/home-media.db';
   const jellyfinUrl = env.JELLYFIN_URL?.trim() || undefined;
+  const jellyfinPublicUrl = env.JELLYFIN_PUBLIC_URL?.trim() || undefined;
   const seerrUrl = env.SEERR_URL?.trim() || undefined;
   const seerrApiKey = env.SEERR_API_KEY?.trim() || undefined;
 
@@ -47,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port,
     databasePath,
     jellyfinUrl,
+    jellyfinPublicUrl,
     seerrUrl,
     seerrApiKey,
     sessionSecret,

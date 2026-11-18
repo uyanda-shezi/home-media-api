@@ -6,6 +6,7 @@ import { checkServicesPreflight } from './health/preflight.js';
 import { handleHealthRequest } from './health/router.js';
 import { handleAuthRequest } from './auth/router.js';
 import { handleUsersRequest } from './users/router.js';
+import { handleJellyfinRequest } from './jellyfin/router.js';
 import { registerShutdownHandlers } from './server/shutdown.js';
 
 export async function bootstrap() {
@@ -50,6 +51,7 @@ export async function bootstrap() {
       if (await handleHealthRequest(req, res, db, config)) return;
       if (await handleAuthRequest(req, res, db, config)) return;
       if (await handleUsersRequest(req, res, db, config)) return;
+      if (await handleJellyfinRequest(req, res, db, config)) return;
 
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not Found' }));

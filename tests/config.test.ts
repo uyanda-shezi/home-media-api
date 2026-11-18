@@ -8,6 +8,7 @@ describe('Configuration Loader', () => {
     assert.strictEqual(config.port, 3000);
     assert.strictEqual(config.databasePath, './data/home-media.db');
     assert.strictEqual(config.jellyfinUrl, undefined);
+    assert.strictEqual(config.jellyfinPublicUrl, undefined);
     assert.strictEqual(config.seerrUrl, undefined);
     assert.strictEqual(config.seerrApiKey, undefined);
     assert.strictEqual(typeof config.sessionSecret, 'string');
@@ -21,6 +22,7 @@ describe('Configuration Loader', () => {
       PORT: '8080',
       DATABASE_PATH: '/var/lib/home-media.db',
       JELLYFIN_URL: 'https://jellyfin.local',
+      JELLYFIN_PUBLIC_URL: 'https://jellyfin.public.lan',
       SEERR_URL: 'https://seerr.local',
       SEERR_API_KEY: 'test-key',
       SESSION_SECRET: 'custom_secret_key_that_is_at_least_32_characters_long',
@@ -30,6 +32,7 @@ describe('Configuration Loader', () => {
     assert.strictEqual(config.port, 8080);
     assert.strictEqual(config.databasePath, '/var/lib/home-media.db');
     assert.strictEqual(config.jellyfinUrl, 'https://jellyfin.local');
+    assert.strictEqual(config.jellyfinPublicUrl, 'https://jellyfin.public.lan');
     assert.strictEqual(config.seerrUrl, 'https://seerr.local');
     assert.strictEqual(config.seerrApiKey, 'test-key');
     assert.strictEqual(config.sessionSecret, 'custom_secret_key_that_is_at_least_32_characters_long');
