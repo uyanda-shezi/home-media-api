@@ -6,6 +6,7 @@ export interface AppConfig {
   seerrApiKey?: string;
   sessionSecret: string;
   sessionTtlDays: number;
+  secureCookies?: boolean;
 }
 
 const DEFAULT_DEV_SECRET = 'dev_insecure_default_secret_key_at_least_32_characters_long_12345';
@@ -39,6 +40,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(`Invalid SESSION_TTL_DAYS environment variable: ${rawTtl}`);
   }
 
+  const secureCookies =
+    env.SECURE_COOKIES === 'true' || (isProduction && env.SECURE_COOKIES !== 'false');
+
   return {
     port,
     databasePath,
@@ -47,5 +51,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     seerrApiKey,
     sessionSecret,
     sessionTtlDays,
+    secureCookies,
   };
 }

@@ -1,7 +1,10 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
-import { authenticateWithJellyfin } from '../src/auth/jellyfin-auth.js';
+import {
+  authenticateWithJellyfin,
+  validateJellyfinToken,
+} from '../src/auth/jellyfin-auth.js';
 
 describe('Jellyfin Authentication Client', () => {
   const activeServers: http.Server[] = [];
@@ -108,6 +111,78 @@ describe('Jellyfin Authentication Client', () => {
     if (!result.ok) {
       assert.strictEqual(result.error.statusCode, 502);
       assert.strictEqual(result.error.message, 'Identity provider (Jellyfin) unconfigured');
+    }
+  });
+
+  it('validateJellyfinToken queries /Users/Me with X-Emby-Token and returns valid profile', async () => {
+    let capturedHeaders: http.IncomingHttpHeaders | null = null;
+
+    const mockServer = http.createServer((req, res) => {
+      capturedHeaders = req.headers;
+      if (req.url === '/Users/Me' && req.method === 'GET') {
+        if (req.headers['x-emby-token'] === 'valid-token-123') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              Id: 'user-guid-abc',
+              Name: 'Bob',
+              Policy: { IsAdministrator: false },
+            })
+          );
+        } else {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: 'Unauthorized' }));
+        }
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+
+    await new Promise<void>((r) => mockServer.listen(0, '127.0.0.1', () => r()));
+    activeServers.push(mockServer);
+
+    const port = (mockServer.address() as { port: number }).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const validResult = await validateJellyfinToken(url, 'valid-token-123');
+    assert.strictEqual(validResult.ok, true);
+    if (validResult.ok) {
+      assert.strictEqual(validResult.data.valid, true);
+      assert.strictEqual(validResult.data.jellyfinUserId, 'user-guid-abc');
+      assert.strictEqual(validResult.data.username, 'Bob');
+      assert.strictEqual(validResult.data.isAdministrator, false);
+    }
+    assert.strictEqual(capturedHeaders?.['x-emby-token'], 'valid-token-123');
+
+    // Invalid token returns 401
+    const invalidResult = await validateJellyfinToken(url, 'bad-token');
+    assert.strictEqual(invalidResult.ok, false);
+    if (!invalidResult.ok) {
+      assert.strictEqual(invalidResult.error.statusCode, 401);
+      assert.strictEqual(invalidResult.error.message, 'Invalid or expired Jellyfin token');
+    }
+
+    // Missing token returns 401
+    const emptyResult = await validateJellyfinToken(url, '');
+    assert.strictEqual(emptyResult.ok, false);
+    if (!emptyResult.ok) {
+      assert.strictEqual(emptyResult.error.statusCode, 401);
+      assert.strictEqual(emptyResult.error.message, 'Token is required');
+    }
+
+    // Unconfigured URL returns 502
+    const unconfResult = await validateJellyfinToken(undefined, 'valid-token-123');
+    assert.strictEqual(unconfResult.ok, false);
+    if (!unconfResult.ok) {
+      assert.strictEqual(unconfResult.error.statusCode, 502);
+    }
+
+    // Unreachable URL returns 502
+    const unreachResult = await validateJellyfinToken('http://127.0.0.1:1', 'valid-token-123');
+    assert.strictEqual(unreachResult.ok, false);
+    if (!unreachResult.ok) {
+      assert.strictEqual(unreachResult.error.statusCode, 502);
+      assert.strictEqual(unreachResult.error.message, 'Identity provider (Jellyfin) unreachable');
     }
   });
 });

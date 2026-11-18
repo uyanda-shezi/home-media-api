@@ -186,6 +186,48 @@ export function deleteSession(db: Database.Database, sessionId: string): boolean
   return result.changes > 0;
 }
 
+export function listUserSessions(db: Database.Database, userId: string): SessionRecord[] {
+  const rows = db
+    .prepare(`
+      SELECT * FROM sessions
+      WHERE user_id = ? AND expires_at > datetime('now')
+      ORDER BY created_at DESC
+    `)
+    .all(userId) as RawSessionRow[];
+  return rows.map(mapSessionRow);
+}
+
+export function deleteUserSession(
+  db: Database.Database,
+  userId: string,
+  sessionId: string
+): boolean {
+  const result = db
+    .prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?')
+    .run(sessionId, userId);
+  return result.changes > 0;
+}
+
+export function deleteAllUserSessions(
+  db: Database.Database,
+  userId: string,
+  keepSessionId?: string
+): number {
+  if (keepSessionId) {
+    const result = db
+      .prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?')
+      .run(userId, keepSessionId);
+    return result.changes;
+  }
+  const result = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  return result.changes;
+}
+
+export function pruneExpiredSessions(db: Database.Database): number {
+  const result = db.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run();
+  return result.changes;
+}
+
 export function getSessionWithUser(
   db: Database.Database,
   sessionId: string

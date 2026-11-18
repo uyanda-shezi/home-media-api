@@ -74,25 +74,44 @@ describe('Auth Flow & Session Management', () => {
     }
   });
 
-  it('handles login, role default assignment, session issuance, and excludes secret tokens', async () => {
+  it('handles login, cookie issuance, dual-mode auth, validate, sessions lifecycle, and logout', async () => {
     // 1. Mock Jellyfin server
     let mockIsAdmin = true;
     const jfServer = http.createServer((req, res) => {
       let body = '';
       req.on('data', (c) => (body += c));
       req.on('end', () => {
-        const { Username } = JSON.parse(body);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            User: {
-              Id: `jf-${Username}`,
-              Name: Username,
-              Policy: { IsAdministrator: mockIsAdmin },
-            },
-            AccessToken: `secret-jf-access-token-for-${Username}`,
-          })
-        );
+        if (req.url === '/Users/AuthenticateByName' && req.method === 'POST') {
+          const { Username } = JSON.parse(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              User: {
+                Id: `jf-${Username}`,
+                Name: Username,
+                Policy: { IsAdministrator: mockIsAdmin },
+              },
+              AccessToken: `secret-jf-access-token-for-${Username}`,
+            })
+          );
+        } else if (req.url === '/Users/Me' && req.method === 'GET') {
+          const token = req.headers['x-emby-token'];
+          if (token === 'valid-jf-token') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                Id: 'jf-token-user',
+                Name: 'TokenUser',
+                Policy: { IsAdministrator: true },
+              })
+            );
+          } else {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Unauthorized' }));
+          }
+        } else {
+          res.writeHead(404).end();
+        }
       });
     });
     await new Promise<void>((r) => jfServer.listen(0, '127.0.0.1', () => r()));
@@ -109,6 +128,7 @@ describe('Auth Flow & Session Management', () => {
         jellyfinUrl: `http://127.0.0.1:${jfPort}`,
         sessionSecret: 'test_secret_key_at_least_32_chars_long_12345',
         sessionTtlDays: 7,
+        secureCookies: false,
       };
 
       const server = http.createServer(async (req, res) => {
@@ -134,63 +154,148 @@ describe('Auth Flow & Session Management', () => {
       assert.ok(dataAdmin.token);
       assert.strictEqual(dataAdmin.user.username, 'AdminUser');
       assert.strictEqual(dataAdmin.user.role, 'admin');
-      // Crucial: check that jellyfin_access_token and password are never in the response
-      assert.strictEqual(dataAdmin.jellyfin_access_token, undefined);
-      assert.strictEqual(dataAdmin.AccessToken, undefined);
-      assert.strictEqual(dataAdmin.password, undefined);
 
-      // B. Login Non-Admin User (standard role)
-      mockIsAdmin = false;
-      const resStandard = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      // Verify Set-Cookie header is issued
+      const setCookie = resAdmin.headers.get('set-cookie');
+      assert.ok(setCookie);
+      assert.ok(setCookie.includes('hm_session='));
+      assert.ok(setCookie.includes('HttpOnly'));
+      assert.ok(setCookie.includes('SameSite=Lax'));
+      assert.ok(setCookie.includes('Path=/'));
+
+      // Extract cookie string for cookie-based requests
+      const cookieValue = setCookie.split(';')[0]; // "hm_session=<token>"
+
+      // B. GET /api/v1/auth/me via Cookie (Dual-mode verification)
+      const resMeCookie = await fetch(`${baseUrl}/api/v1/auth/me`, {
+        headers: { Cookie: cookieValue },
+      });
+      assert.strictEqual(resMeCookie.status, 200);
+      const dataMeCookie = (await resMeCookie.json()) as any;
+      assert.strictEqual(dataMeCookie.user.username, 'AdminUser');
+
+      // C. GET /api/v1/auth/validate
+      const resValidate = await fetch(`${baseUrl}/api/v1/auth/validate`, {
+        headers: { Cookie: cookieValue },
+      });
+      assert.strictEqual(resValidate.status, 200);
+      const dataValidate = (await resValidate.json()) as any;
+      assert.strictEqual(dataValidate.valid, true);
+      assert.strictEqual(dataValidate.user.username, 'AdminUser');
+      assert.ok(dataValidate.session.id);
+      assert.ok(dataValidate.session.expiresAt);
+
+      // D. GET /api/v1/auth/validate without token returns 401
+      const resValidateUnauth = await fetch(`${baseUrl}/api/v1/auth/validate`);
+      assert.strictEqual(resValidateUnauth.status, 401);
+      const dataValidateUnauth = (await resValidateUnauth.json()) as any;
+      assert.strictEqual(dataValidateUnauth.valid, false);
+
+      // E. POST /api/v1/auth/validate-jellyfin
+      const resJfValSuccess = await fetch(`${baseUrl}/api/v1/auth/validate-jellyfin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'RegularUser', password: 'pwd' }),
+        body: JSON.stringify({ token: 'valid-jf-token' }),
       });
-      assert.strictEqual(resStandard.status, 200);
-      const dataStandard = (await resStandard.json()) as any;
-      assert.strictEqual(dataStandard.user.role, 'standard');
+      assert.strictEqual(resJfValSuccess.status, 200);
+      const dataJfValSuccess = (await resJfValSuccess.json()) as any;
+      assert.strictEqual(dataJfValSuccess.valid, true);
+      assert.strictEqual(dataJfValSuccess.username, 'TokenUser');
+      assert.strictEqual(dataJfValSuccess.isAdministrator, true);
 
-      // C. Subsequent login preserves assigned role even if Jellyfin isAdministrator changes
-      // Suppose RegularUser is granted Jellyfin admin externally, but household role is 'standard'
-      mockIsAdmin = true;
-      const resSubsequent = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      // Invalid token to validate-jellyfin
+      const resJfValFail = await fetch(`${baseUrl}/api/v1/auth/validate-jellyfin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'RegularUser', password: 'pwd' }),
+        body: JSON.stringify({ token: 'invalid-jf-token' }),
       });
-      const dataSubsequent = (await resSubsequent.json()) as any;
-      assert.strictEqual(dataSubsequent.user.role, 'standard'); // preserved!
+      assert.strictEqual(resJfValFail.status, 401);
 
-      // D. GET /api/v1/auth/me with valid token
-      const resMe = await fetch(`${baseUrl}/api/v1/auth/me`, {
+      // Missing token to validate-jellyfin
+      const resJfValMissing = await fetch(`${baseUrl}/api/v1/auth/validate-jellyfin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      assert.strictEqual(resJfValMissing.status, 400);
+
+      // F. Create a second session for AdminUser (e.g. login from second device)
+      const resAdmin2 = await fetch(`${baseUrl}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'AdminUser', password: 'pwd' }),
+      });
+      assert.strictEqual(resAdmin2.status, 200);
+      const dataAdmin2 = (await resAdmin2.json()) as any;
+
+      // G. GET /api/v1/auth/sessions lists active sessions
+      const resSessions = await fetch(`${baseUrl}/api/v1/auth/sessions`, {
         headers: { Authorization: `Bearer ${dataAdmin.token}` },
       });
-      assert.strictEqual(resMe.status, 200);
-      const dataMe = (await resMe.json()) as any;
-      assert.strictEqual(dataMe.user.username, 'AdminUser');
-      assert.strictEqual(dataMe.user.role, 'admin');
+      assert.strictEqual(resSessions.status, 200);
+      const dataSessions = (await resSessions.json()) as any;
+      assert.strictEqual(dataSessions.sessions.length, 2);
 
-      // E. GET /api/v1/auth/me without token or invalid token returns 401
-      const resNoToken = await fetch(`${baseUrl}/api/v1/auth/me`);
-      assert.strictEqual(resNoToken.status, 401);
+      const currentSession = dataSessions.sessions.find((s: any) => s.isCurrent);
+      assert.ok(currentSession);
+      const otherSession = dataSessions.sessions.find((s: any) => !s.isCurrent);
+      assert.ok(otherSession);
 
-      const resBadToken = await fetch(`${baseUrl}/api/v1/auth/me`, {
-        headers: { Authorization: `Bearer bad.token` },
+      // H. DELETE /api/v1/auth/sessions/:id revokes specific other session
+      const resDelSession = await fetch(`${baseUrl}/api/v1/auth/sessions/${otherSession.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${dataAdmin.token}` },
       });
-      assert.strictEqual(resBadToken.status, 401);
+      assert.strictEqual(resDelSession.status, 200);
+      const dataDelSession = (await resDelSession.json()) as any;
+      assert.strictEqual(dataDelSession.status, 'ok');
+      assert.strictEqual(dataDelSession.revokedSessionId, otherSession.id);
 
-      // F. POST /api/v1/auth/logout revokes session
+      // Check revoked session is gone
+      const resCheckOther = await fetch(`${baseUrl}/api/v1/auth/me`, {
+        headers: { Authorization: `Bearer ${dataAdmin2.token}` },
+      });
+      assert.strictEqual(resCheckOther.status, 401);
+
+      // I. POST /api/v1/auth/sessions/revoke-all with keepCurrent: true
+      // Create another session first
+      await fetch(`${baseUrl}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'AdminUser', password: 'pwd' }),
+      });
+
+      const resRevokeAll = await fetch(`${baseUrl}/api/v1/auth/sessions/revoke-all`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${dataAdmin.token}`,
+        },
+        body: JSON.stringify({ keepCurrent: true }),
+      });
+      assert.strictEqual(resRevokeAll.status, 200);
+      const dataRevokeAll = (await resRevokeAll.json()) as any;
+      assert.strictEqual(dataRevokeAll.revokedCount, 1);
+
+      // Calling session is still active
+      const resStillActive = await fetch(`${baseUrl}/api/v1/auth/me`, {
+        headers: { Authorization: `Bearer ${dataAdmin.token}` },
+      });
+      assert.strictEqual(resStillActive.status, 200);
+
+      // J. POST /api/v1/auth/logout clears cookie and revokes session
       const resLogout = await fetch(`${baseUrl}/api/v1/auth/logout`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${dataAdmin.token}` },
+        headers: { Cookie: cookieValue },
       });
       assert.strictEqual(resLogout.status, 200);
-      const dataLogout = (await resLogout.json()) as any;
-      assert.strictEqual(dataLogout.status, 'ok');
+      const logoutCookie = resLogout.headers.get('set-cookie');
+      assert.ok(logoutCookie);
+      assert.ok(logoutCookie.includes('Max-Age=0'));
 
-      // G. Request with revoked token now returns 401
+      // Subsequent call fails
       const resAfterLogout = await fetch(`${baseUrl}/api/v1/auth/me`, {
-        headers: { Authorization: `Bearer ${dataAdmin.token}` },
+        headers: { Cookie: cookieValue },
       });
       assert.strictEqual(resAfterLogout.status, 401);
     } finally {

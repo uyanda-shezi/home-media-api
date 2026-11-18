@@ -13,6 +13,7 @@ describe('Configuration Loader', () => {
     assert.strictEqual(typeof config.sessionSecret, 'string');
     assert.ok(config.sessionSecret.length >= 32);
     assert.strictEqual(config.sessionTtlDays, 7);
+    assert.strictEqual(config.secureCookies, false);
   });
 
   it('parses valid environment variables', () => {
@@ -59,6 +60,12 @@ describe('Configuration Loader', () => {
       SESSION_SECRET: 'production_secret_key_at_least_32_characters_long_12345',
     });
     assert.strictEqual(config.sessionSecret, 'production_secret_key_at_least_32_characters_long_12345');
+    assert.strictEqual(config.secureCookies, true);
+
+    const explicitCookieConfig = loadConfig({
+      SECURE_COOKIES: 'true',
+    });
+    assert.strictEqual(explicitCookieConfig.secureCookies, true);
   });
 
   it('throws an error on invalid SESSION_TTL_DAYS', () => {

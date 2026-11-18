@@ -14,6 +14,17 @@ export type JellyfinAuthResult =
   | { ok: true; data: JellyfinAuthData }
   | { ok: false; error: JellyfinAuthError };
 
+export interface JellyfinValidationData {
+  valid: true;
+  jellyfinUserId: string;
+  username: string;
+  isAdministrator: boolean;
+}
+
+export type JellyfinValidationResult =
+  | { ok: true; data: JellyfinValidationData }
+  | { ok: false; error: JellyfinAuthError };
+
 export async function authenticateWithJellyfin(
   jellyfinUrl: string | undefined,
   username: string,
@@ -99,6 +110,106 @@ export async function authenticateWithJellyfin(
         username: resolvedUsername,
         isAdministrator,
         accessToken,
+      },
+    };
+  } catch {
+    return {
+      ok: false,
+      error: {
+        statusCode: 502,
+        message: 'Identity provider (Jellyfin) unreachable',
+      },
+    };
+  }
+}
+
+export async function validateJellyfinToken(
+  jellyfinUrl: string | undefined,
+  token: string
+): Promise<JellyfinValidationResult> {
+  if (!jellyfinUrl) {
+    return {
+      ok: false,
+      error: {
+        statusCode: 502,
+        message: 'Identity provider (Jellyfin) unconfigured',
+      },
+    };
+  }
+
+  if (!token || typeof token !== 'string' || token.trim().length === 0) {
+    return {
+      ok: false,
+      error: {
+        statusCode: 401,
+        message: 'Token is required',
+      },
+    };
+  }
+
+  const endpoint = `${jellyfinUrl.replace(/\/+$/, '')}/Users/Me`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'X-Emby-Token': token.trim(),
+        'X-Emby-Authorization':
+          'MediaBrowser Client="HomeMedia", Device="HomeMediaServer", DeviceId="home-media-api", Version="0.1.0"',
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        error: {
+          statusCode: 401,
+          message: 'Invalid or expired Jellyfin token',
+        },
+      };
+    }
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: {
+          statusCode: 502,
+          message: `Identity provider error: HTTP ${res.status}`,
+        },
+      };
+    }
+
+    const json = (await res.json()) as {
+      Id?: string;
+      Name?: string;
+      Policy?: {
+        IsAdministrator?: boolean;
+      };
+    };
+
+    const userId = json.Id;
+    const username = json.Name;
+    const isAdministrator = Boolean(json.Policy?.IsAdministrator);
+
+    if (!userId || !username) {
+      return {
+        ok: false,
+        error: {
+          statusCode: 502,
+          message: 'Malformed response from Jellyfin identity provider',
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        valid: true,
+        jellyfinUserId: userId,
+        username,
+        isAdministrator,
       },
     };
   } catch {

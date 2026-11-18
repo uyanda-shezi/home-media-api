@@ -8,6 +8,11 @@ import { runMigrations } from '../src/db/migrate.js';
 import { signToken } from '../src/auth/crypto.js';
 import { handleUsersRequest } from '../src/users/router.js';
 import { upsertUserAndCreateSession } from '../src/users/service.js';
+import {
+  hasMinimumRole,
+  hasRole,
+  ROLE_HIERARCHY,
+} from '../src/auth/middleware.js';
 import type { AppConfig } from '../src/config.js';
 
 describe('Household Role Middleware & Management', () => {
@@ -231,6 +236,117 @@ describe('Household Role Middleware & Management', () => {
       assert.strictEqual(resDemoteAllowed.status, 200);
       const dataDemoteAllowed = (await resDemoteAllowed.json()) as any;
       assert.strictEqual(dataDemoteAllowed.user.role, 'standard');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('evaluates role hierarchy and hasMinimumRole accurately', () => {
+    assert.strictEqual(ROLE_HIERARCHY.admin > ROLE_HIERARCHY.standard, true);
+    assert.strictEqual(ROLE_HIERARCHY.standard > ROLE_HIERARCHY.request_only, true);
+
+    const adminUser = { role: 'admin' } as any;
+    const standardUser = { role: 'standard' } as any;
+    const requestOnlyUser = { role: 'request_only' } as any;
+
+    // Admin passes all minimum checks
+    assert.strictEqual(hasMinimumRole(adminUser, 'admin'), true);
+    assert.strictEqual(hasMinimumRole(adminUser, 'standard'), true);
+    assert.strictEqual(hasMinimumRole(adminUser, 'request_only'), true);
+
+    // Standard passes standard and request_only, fails admin
+    assert.strictEqual(hasMinimumRole(standardUser, 'admin'), false);
+    assert.strictEqual(hasMinimumRole(standardUser, 'standard'), true);
+    assert.strictEqual(hasMinimumRole(standardUser, 'request_only'), true);
+
+    // Request only passes only request_only
+    assert.strictEqual(hasMinimumRole(requestOnlyUser, 'admin'), false);
+    assert.strictEqual(hasMinimumRole(requestOnlyUser, 'standard'), false);
+    assert.strictEqual(hasMinimumRole(requestOnlyUser, 'request_only'), true);
+  });
+
+  it('admin can forcefully revoke all sessions for a user via DELETE /api/v1/users/:id/sessions', async () => {
+    const db = createDb(dbPath);
+    try {
+      runMigrations(db, './migrations');
+
+      const config: AppConfig = {
+        port: 3000,
+        databasePath: dbPath,
+        sessionSecret: secret,
+        sessionTtlDays: 7,
+      };
+
+      const server = http.createServer(async (req, res) => {
+        const handled = await handleUsersRequest(req, res, db, config);
+        if (!handled) res.writeHead(404).end();
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+      activeServers.push(server);
+
+      const port = (server.address() as { port: number }).port;
+      const baseUrl = `http://127.0.0.1:${port}`;
+
+      // Admin user
+      const adminCtx = upsertUserAndCreateSession(db, {
+        userId: 'jf-admin-main',
+        username: 'AdminUser',
+        isAdministrator: true,
+        accessToken: 'jf-token-1',
+      });
+      const adminToken = signToken(
+        { sid: adminCtx.session.id, uid: adminCtx.user.id, exp: Date.now() + 3600_000 },
+        secret
+      );
+
+      // Target user with 2 active sessions
+      const targetCtx1 = upsertUserAndCreateSession(db, {
+        userId: 'jf-target-user',
+        username: 'TargetUser',
+        isAdministrator: false,
+        accessToken: 'jf-token-2',
+      });
+      const targetCtx2 = upsertUserAndCreateSession(db, {
+        userId: 'jf-target-user',
+        username: 'TargetUser',
+        isAdministrator: false,
+        accessToken: 'jf-token-3',
+      });
+      const targetToken1 = signToken(
+        { sid: targetCtx1.session.id, uid: targetCtx1.user.id, exp: Date.now() + 3600_000 },
+        secret
+      );
+
+      // 1. Target user tries to revoke sessions on another user -> 403 Forbidden
+      const resForbidden = await fetch(`${baseUrl}/api/v1/users/${adminCtx.user.id}/sessions`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${targetToken1}` },
+      });
+      assert.strictEqual(resForbidden.status, 403);
+
+      // 2. Admin revokes non-existent user -> 404 Not Found
+      const resNotFound = await fetch(`${baseUrl}/api/v1/users/non-existent-uuid/sessions`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.strictEqual(resNotFound.status, 404);
+
+      // 3. Admin revokes target user's sessions -> 200 OK
+      const resRevoke = await fetch(`${baseUrl}/api/v1/users/${targetCtx1.user.id}/sessions`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.strictEqual(resRevoke.status, 200);
+      const dataRevoke = (await resRevoke.json()) as any;
+      assert.strictEqual(dataRevoke.status, 'ok');
+      assert.strictEqual(dataRevoke.userId, targetCtx1.user.id);
+      assert.strictEqual(dataRevoke.revokedCount, 2);
+
+      // Verify sessions are gone from DB
+      const remainingSessions = db
+        .prepare('SELECT COUNT(*) as count FROM sessions WHERE user_id = ?')
+        .get(targetCtx1.user.id) as { count: number };
+      assert.strictEqual(remainingSessions.count, 0);
     } finally {
       db.close();
     }
