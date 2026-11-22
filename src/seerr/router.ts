@@ -21,6 +21,7 @@ import {
   SeerrError,
   submitRequest,
 } from './client.js';
+import { linkSeerrRequestAndWatchlist } from '../mylist/service.js';
 
 const MEDIA_DETAILS_REGEX = /^\/api\/v1\/seerr\/media\/(movie|tv)\/(\d+)\/?$/;
 const REQUEST_APPROVE_REGEX = /^\/api\/v1\/seerr\/requests\/(\d+)\/approve\/?$/;
@@ -266,6 +267,19 @@ export async function handleSeerrRequest(
         is4k: Boolean(body.is4k),
         userId: seerrUser?.id,
       });
+
+      // Hook: Automatic Watchlist registration (safely wrapped)
+      try {
+        linkSeerrRequestAndWatchlist(db, authCtx.user.id, {
+          tmdbId: mediaId,
+          mediaType: mediaType === 'tv' ? 'series' : 'movie',
+          seerrRequestId: created.id,
+          title: created.media?.title,
+          posterPath: created.media?.posterPath,
+        });
+      } catch (hookErr) {
+        console.error('Failed to link Seerr request to My List:', hookErr);
+      }
 
       sendJson(res, 201, created);
       return true;

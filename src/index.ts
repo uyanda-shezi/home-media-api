@@ -8,6 +8,7 @@ import { handleAuthRequest } from './auth/router.js';
 import { handleUsersRequest } from './users/router.js';
 import { handleJellyfinRequest } from './jellyfin/router.js';
 import { handleSeerrRequest } from './seerr/router.js';
+import { handleMyListRequest } from './mylist/router.js';
 import { registerShutdownHandlers } from './server/shutdown.js';
 
 export async function bootstrap() {
@@ -54,6 +55,7 @@ export async function bootstrap() {
       if (await handleUsersRequest(req, res, db, config)) return;
       if (await handleJellyfinRequest(req, res, db, config)) return;
       if (await handleSeerrRequest(req, res, db, config)) return;
+      if (await handleMyListRequest(req, res, db, config)) return;
 
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not Found' }));
