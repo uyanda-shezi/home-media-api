@@ -9,6 +9,8 @@ import { handleUsersRequest } from './users/router.js';
 import { handleJellyfinRequest } from './jellyfin/router.js';
 import { handleSeerrRequest } from './seerr/router.js';
 import { handleMyListRequest } from './mylist/router.js';
+import { createSyncWorker } from './sync/worker.js';
+import { handleSyncWebhook } from './sync/webhook.js';
 import { registerShutdownHandlers } from './server/shutdown.js';
 
 export async function bootstrap() {
@@ -47,9 +49,12 @@ export async function bootstrap() {
     }${services.seerr.error ? ` [${services.seerr.error}]` : ''}`
   );
 
+  const worker = createSyncWorker(db, config);
+
   // 4. HTTP Server Dispatcher
   const server = http.createServer(async (req, res) => {
     try {
+      if (await handleSyncWebhook(req, res, config, worker)) return;
       if (await handleHealthRequest(req, res, db, config)) return;
       if (await handleAuthRequest(req, res, db, config)) return;
       if (await handleUsersRequest(req, res, db, config)) return;
@@ -68,7 +73,7 @@ export async function bootstrap() {
     }
   });
 
-  registerShutdownHandlers(server, db);
+  registerShutdownHandlers(server, db, 5000, worker.stop);
 
   server.listen(config.port, () => {
     console.log(`Home Media API listening on port ${config.port}`);

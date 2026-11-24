@@ -1,8 +1,9 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getMyListItem } from '../src/mylist/service.js';
 import { createDb } from '../src/db/connection.js';
 import { runMigrations } from '../src/db/migrate.js';
 import { upsertUserAndCreateSession } from '../src/users/service.js';
@@ -31,11 +32,13 @@ describe('Media Identity & My List Migrations', () => {
     const result = runMigrations(db, './migrations');
     assert.ok(result.applied.includes('0003_media_and_my_list.sql'));
 
-    // Verify system_metadata schema_version is 3
+    assert.ok(result.applied.includes('0004_playback_runtime.sql'));
+
+    // Verify the fresh schema version.
     const versionRow = db
       .prepare(`SELECT value FROM system_metadata WHERE key = 'schema_version'`)
       .get() as { value: string };
-    assert.strictEqual(versionRow.value, '3');
+    assert.strictEqual(versionRow.value, '4');
 
     // 2. Insert test user
     const userCtx = upsertUserAndCreateSession(db, {
@@ -110,4 +113,29 @@ describe('Media Identity & My List Migrations', () => {
 
     db.close();
   });
+});
+
+it('upgrades populated v3 and does not reapply the runtime migration', t => {
+  const dir = join(process.cwd(), 'tmp-test-mylist-v3');
+  mkdirSync(dir);
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const migration of readdirSync('./migrations').filter(name => /^000[123]_/.test(name))) {
+    copyFileSync(join('migrations', migration), join(dir, migration));
+  }
+  const db = createDb(':memory:');
+  t.after(() => db.close());
+  assert.equal(runMigrations(db, dir).totalApplied, 3);
+  db.exec(`
+    INSERT INTO users (id, jellyfin_user_id, username, role) VALUES ('u','j','user','standard');
+    INSERT INTO media_items (id, media_type, tmdb_id, title) VALUES ('m','movie',1,'title');
+    INSERT INTO my_list (id, user_id, media_id, user_intent, acquisition_state, playback_state,
+      playback_position_ticks, playback_percentage, last_played_at)
+    VALUES ('l','u','m','not_saved','available','in_progress',5,50,'2026-01-01 00:00:00');
+  `);
+  const before = db.prepare('SELECT * FROM my_list').get() as object;
+  assert.deepEqual(runMigrations(db).applied, ['0004_playback_runtime.sql']);
+  assert.deepEqual(runMigrations(db).applied, []);
+  assert.deepEqual(db.prepare('SELECT * FROM my_list').get(), { ...before, playback_runtime_ticks: null });
+  assert.equal(getMyListItem(db, 'u', 'm')?.playback.runtimeTicks, null);
+  assert.throws(() => db.exec('UPDATE my_list SET playback_runtime_ticks = 0'), /CHECK constraint/);
 });

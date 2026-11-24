@@ -77,3 +77,13 @@ describe('Configuration Loader', () => {
     assert.throws(() => loadConfig({ SESSION_TTL_DAYS: '-5' }), /Invalid SESSION_TTL_DAYS/);
   });
 });
+
+it('requires exact sync opt-in and independently validates an optional webhook secret', () => {
+  for (const value of [undefined, '', 'false', 'TRUE', ' true ', '1']) {
+    assert.equal(loadConfig({ SYNC_ENABLED: value }).syncEnabled, false);
+  }
+  assert.equal(loadConfig({ SYNC_ENABLED: 'true' }).syncEnabled, true);
+  assert.equal(loadConfig({ SYNC_WEBHOOK_SECRET: ' ' }).syncWebhookSecret, undefined);
+  assert.equal(loadConfig({ SYNC_WEBHOOK_SECRET: 's'.repeat(32) }).syncWebhookSecret, 's'.repeat(32));
+  assert.throws(() => loadConfig({ SYNC_WEBHOOK_SECRET: 'short' }), /32 characters/);
+});

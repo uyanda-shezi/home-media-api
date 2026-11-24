@@ -41,6 +41,7 @@ export interface MyListRecord {
   acquisition_state: AcquisitionState;
   playback_state: PlaybackState;
   playback_position_ticks: number;
+  playback_runtime_ticks: number | null;
   playback_percentage: number;
   last_played_at: string | null;
   created_at: string;
@@ -76,6 +77,7 @@ export interface MyListItemView {
   playbackState: PlaybackState;
   playback: {
     positionTicks: number;
+    runtimeTicks: number | null;
     percentage: number;
     lastPlayedAt: string | null;
   };

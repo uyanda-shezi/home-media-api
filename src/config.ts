@@ -8,6 +8,8 @@ export interface AppConfig {
   sessionSecret: string;
   sessionTtlDays: number;
   secureCookies?: boolean;
+  syncEnabled?: boolean;
+  syncWebhookSecret?: string;
 }
 
 const DEFAULT_DEV_SECRET = 'dev_insecure_default_secret_key_at_least_32_characters_long_12345';
@@ -45,6 +47,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const secureCookies =
     env.SECURE_COOKIES === 'true' || (isProduction && env.SECURE_COOKIES !== 'false');
 
+  const syncWebhookSecret = env.SYNC_WEBHOOK_SECRET?.trim() || undefined;
+  if (syncWebhookSecret && syncWebhookSecret.length < 32) {
+    throw new Error('SYNC_WEBHOOK_SECRET must be at least 32 characters long');
+  }
+
   return {
     port,
     databasePath,
@@ -55,5 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret,
     sessionTtlDays,
     secureCookies,
+    syncEnabled: env.SYNC_ENABLED === 'true',
+    syncWebhookSecret,
   };
 }

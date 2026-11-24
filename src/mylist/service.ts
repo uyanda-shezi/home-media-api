@@ -66,6 +66,29 @@ export function findMediaItemById(
   return row || null;
 }
 
+export function positiveProviderId(value: unknown): number | undefined {
+  const number = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  return typeof number === 'number' && Number.isSafeInteger(number) && number > 0
+    ? number
+    : undefined;
+}
+
+export function normalizeJellyfinId(value: unknown): string | undefined {
+  if (typeof value !== 'string' ||
+      !/^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(value)) {
+    return undefined;
+  }
+  return value.replaceAll('-', '').toLowerCase();
+}
+
+export function jellyfinOwners(db: Database.Database, id: string): MediaItemRecord[] {
+  return (db.prepare(
+    "SELECT * FROM media_items WHERE lower(replace(jellyfin_item_id, '-', '')) = ?"
+  ).all(id) as MediaItemRecord[]).filter(row => normalizeJellyfinId(row.jellyfin_item_id) === id);
+}
+
+export class SharedIdentityConflict extends Error {}
+
 export function findMediaItemByExternalIds(
   db: Database.Database,
   identifiers: {
@@ -85,10 +108,9 @@ export function findMediaItemByExternalIds(
   }
 
   if (identifiers.jellyfinItemId) {
-    const row = db
-      .prepare(`SELECT * FROM media_items WHERE jellyfin_item_id = ?`)
-      .get(identifiers.jellyfinItemId) as MediaItemRecord | undefined;
-    if (row) return row;
+    const id = normalizeJellyfinId(identifiers.jellyfinItemId);
+    const owners = id ? jellyfinOwners(db, id) : [];
+    return owners.length === 1 ? owners[0] : null;
   }
 
   if (identifiers.tvdbId) {
@@ -188,7 +210,17 @@ export function upsertMediaItemAndWatchlist(
         throw new Error(`Media item not found with id: ${payload.mediaId}`);
       }
     } else if ('media' in payload && payload.media) {
-      mediaItem = upsertMediaItem(db, payload.media);
+      const { tmdbId, mediaType, jellyfinItemId, tvdbId, imdbId, seerrRequestId: _request, ...metadata } = payload.media;
+      if (!positiveProviderId(tmdbId)) throw new Error('A valid TMDb ID is required');
+      const shared = findMediaItemByExternalIds(db, { tmdbId, mediaType });
+      const guid = normalizeJellyfinId(jellyfinItemId);
+      if ((guid && jellyfinOwners(db, guid).some(owner => owner.id !== shared?.id)) ||
+          (guid && shared?.jellyfin_item_id && normalizeJellyfinId(shared.jellyfin_item_id) !== guid) ||
+          (tvdbId !== undefined && shared?.tvdb_id != null && shared.tvdb_id !== tvdbId) ||
+          (imdbId !== undefined && shared?.imdb_id != null && shared.imdb_id !== imdbId)) {
+        throw new SharedIdentityConflict('Provider ID conflicts with the shared media identity');
+      }
+      mediaItem = upsertMediaItem(db, { tmdbId, mediaType, ...metadata });
     } else {
       throw new Error('Invalid media specification in request');
     }
@@ -221,7 +253,7 @@ export function upsertMediaItemAndWatchlist(
       throw new Error('Failed to retrieve upserted My List item');
     }
     return item;
-  })();
+  }).immediate();
 }
 
 export function linkSeerrRequestAndWatchlist(
@@ -375,6 +407,7 @@ function mapRowToView(row: any): MyListItemView {
     playbackState: row.playback_state,
     playback: {
       positionTicks: row.playback_position_ticks || 0,
+      runtimeTicks: row.playback_runtime_ticks ?? null,
       percentage: row.playback_percentage || 0.0,
       lastPlayedAt: row.last_played_at,
     },
@@ -429,7 +462,7 @@ export function getMyList(
       : options.sort === 'title'
       ? 'm.title'
       : options.sort === 'last_played_at'
-      ? 'ml.last_played_at'
+      ? 'julianday(ml.last_played_at)'
       : 'ml.updated_at';
 
   const orderDir = options.order === 'asc' ? 'ASC' : 'DESC';
@@ -452,6 +485,7 @@ export function getMyList(
       ml.acquisition_state,
       ml.playback_state,
       ml.playback_position_ticks,
+      ml.playback_runtime_ticks,
       ml.playback_percentage,
       ml.last_played_at,
       ml.created_at as mylist_created_at,
@@ -501,6 +535,7 @@ export function getMyListItem(
       ml.acquisition_state,
       ml.playback_state,
       ml.playback_position_ticks,
+      ml.playback_runtime_ticks,
       ml.playback_percentage,
       ml.last_played_at,
       ml.created_at as mylist_created_at,
@@ -543,6 +578,7 @@ export function getMyListStatus(
   playbackState: PlaybackState;
   playback: {
     positionTicks: number;
+    runtimeTicks: number | null;
     percentage: number;
     lastPlayedAt: string | null;
   };
@@ -563,6 +599,7 @@ export function getMyListStatus(
       playbackState: 'unwatched',
       playback: {
         positionTicks: 0,
+        runtimeTicks: null,
         percentage: 0.0,
         lastPlayedAt: null,
       },
@@ -581,6 +618,7 @@ export function getMyListStatus(
       playbackState: 'unwatched',
       playback: {
         positionTicks: 0,
+        runtimeTicks: null,
         percentage: 0.0,
         lastPlayedAt: null,
       },
@@ -594,6 +632,7 @@ export function getMyListStatus(
     playbackState: myListRow.playback_state,
     playback: {
       positionTicks: myListRow.playback_position_ticks || 0,
+      runtimeTicks: myListRow.playback_runtime_ticks ?? null,
       percentage: myListRow.playback_percentage || 0.0,
       lastPlayedAt: myListRow.last_played_at,
     },

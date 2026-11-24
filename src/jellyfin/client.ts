@@ -93,16 +93,33 @@ export function sanitizeMediaItem(raw: any): JellyfinMediaItem {
 
 async function fetchJellyfinJson<T>(
   url: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  syncSignal?: AbortSignal
 ): Promise<T> {
+  const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  const signal = syncSignal ? AbortSignal.any([syncSignal, timeout]) : timeout;
+
   let res: Response;
   try {
     res = await fetch(url, {
       ...options,
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
     throw new JellyfinError(502, 'Upstream Jellyfin service is unreachable or timed out');
+  }
+
+  if (syncSignal) {
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => {});
+      throw new JellyfinError(res.status, 'Upstream Jellyfin sync read failed');
+    }
+    try {
+      return (await res.json()) as T;
+    } catch (error) {
+      const status = !signal.aborted && error instanceof SyntaxError ? 422 : 502;
+      throw new JellyfinError(status, 'Upstream Jellyfin sync response could not be read');
+    }
   }
 
   if (res.status === 401 || res.status === 403) {
@@ -471,4 +488,30 @@ export async function setPlayedStatus(
   if (!res.ok) {
     throw new JellyfinError(502, `Failed to update played status in Jellyfin: HTTP ${res.status}`);
   }
+}
+
+export function readJellyfinSync(
+  baseUrl: string,
+  token: string,
+  userId: string,
+  item: { id: string } | { title: string; type: 'Movie' | 'Series' },
+  signal: AbortSignal
+): Promise<unknown> {
+  const params = new URLSearchParams({
+    userId,
+    enableUserData: 'true',
+    enableImages: 'false',
+    fields: 'ProviderIds',
+    limit: '25',
+  });
+  if ('id' in item) {
+    params.set('ids', item.id);
+  } else {
+    params.set('searchTerm', item.title);
+    params.set('includeItemTypes', item.type);
+    params.set('recursive', 'true');
+    params.set('enableTotalRecordCount', 'true');
+  }
+  const endpoint = `${baseUrl.replace(/\/+$/, '')}/Items?${params}`;
+  return fetchJellyfinJson(endpoint, { headers: getHeaders(token), redirect: 'error' }, signal);
 }

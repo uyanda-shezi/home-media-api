@@ -9,6 +9,9 @@ import {
 } from '../auth/middleware.js';
 import {
   getMyList,
+  normalizeJellyfinId,
+  positiveProviderId,
+  SharedIdentityConflict,
   getMyListItem,
   getMyListStatus,
   getUserPreferences,
@@ -205,8 +208,20 @@ export async function handleMyListRequest(
         return true;
       }
 
-      const tmdbId = body.tmdbId ? parseInt(body.tmdbId, 10) : undefined;
-      const title = body.title?.trim();
+      const tmdbId = positiveProviderId(body.tmdbId);
+      const tvdbId = positiveProviderId(body.tvdbId);
+      const imdbId = typeof body.imdbId === 'string' && /^tt\d+$/.test(body.imdbId)
+        ? body.imdbId
+        : undefined;
+      const jellyfinItemId = normalizeJellyfinId(body.jellyfinItemId);
+      if (!tmdbId ||
+          (body.tvdbId !== undefined && !tvdbId) ||
+          (body.imdbId !== undefined && !imdbId) ||
+          (body.jellyfinItemId !== undefined && !jellyfinItemId)) {
+        sendError(res, 400, 'Invalid provider ID');
+        return true;
+      }
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
       if (!title) {
         sendError(res, 400, 'title is required when creating a new media item');
         return true;
@@ -215,10 +230,10 @@ export async function handleMyListRequest(
       const item = upsertMediaItemAndWatchlist(db, userId, {
         media: {
           mediaType,
-          tmdbId: !isNaN(tmdbId || NaN) ? tmdbId : undefined,
-          tvdbId: body.tvdbId ? parseInt(body.tvdbId, 10) : undefined,
-          imdbId: body.imdbId?.trim() || undefined,
-          jellyfinItemId: body.jellyfinItemId?.trim() || undefined,
+          tmdbId,
+          tvdbId,
+          imdbId,
+          jellyfinItemId,
           title,
           originalTitle: body.originalTitle?.trim() || undefined,
           releaseDate: body.releaseDate || undefined,
@@ -338,6 +353,10 @@ export async function handleMyListRequest(
 
     return false;
   } catch (err: any) {
+    if (err instanceof SharedIdentityConflict) {
+      sendError(res, 409, err.message);
+      return true;
+    }
     console.error('Unhandled My List router error:', err);
     sendError(res, 500, 'Internal Server Error');
     return true;

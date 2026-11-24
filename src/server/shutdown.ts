@@ -1,23 +1,30 @@
 import type { Server } from 'node:http';
 import type Database from 'better-sqlite3';
 
-let isShuttingDown = false;
+let shutdowns = new WeakMap<Server, Promise<void>>();
 
 export function _resetShutdownState(): void {
-  isShuttingDown = false;
+  shutdowns = new WeakMap();
 }
 
-export async function performGracefulShutdown(
+export function performGracefulShutdown(
   server: Server,
   db: Database.Database,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
+  stopWorker: () => Promise<void> = async () => {}
 ): Promise<void> {
-  if (isShuttingDown) {
-    return;
-  }
-  isShuttingDown = true;
+  const existing = shutdowns.get(server);
+  if (existing) return existing;
+  const shutdown = drain(server, db, timeoutMs, stopWorker);
+  shutdowns.set(server, shutdown);
+  return shutdown;
+}
 
+async function drain(
+  server: Server, db: Database.Database, timeoutMs: number, stopWorker: () => Promise<void>
+): Promise<void> {
   console.log('Initiating graceful shutdown...');
+  const workerStopped = stopWorker();
 
   // 1. Close HTTP server and wait for in-flight requests to drain
   await new Promise<void>((resolve) => {
@@ -41,11 +48,15 @@ export async function performGracefulShutdown(
     server.closeIdleConnections?.();
   });
 
+  await workerStopped;
+
   // 2. Checkpoint WAL and close SQLite database cleanly
   try {
     console.log('Flushing SQLite WAL checkpoint (TRUNCATE)...');
-    db.pragma('wal_checkpoint(TRUNCATE)');
-    console.log('WAL checkpoint flushed.');
+    db.pragma('busy_timeout = 0');
+    const [checkpoint] = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+    if (checkpoint?.busy) console.warn('WAL checkpoint deferred due to SQLite contention.');
+    else console.log('WAL checkpoint flushed.');
   } catch (err) {
     console.error('Error during WAL checkpoint:', err);
   }
@@ -61,12 +72,13 @@ export async function performGracefulShutdown(
 export function registerShutdownHandlers(
   server: Server,
   db: Database.Database,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
+  stopWorker?: () => Promise<void>
 ): void {
   const shutdown = async (signal: string) => {
     console.log(`Received signal ${signal}.`);
     try {
-      await performGracefulShutdown(server, db, timeoutMs);
+      await performGracefulShutdown(server, db, timeoutMs, stopWorker);
       process.exit(0);
     } catch (err) {
       console.error('Fatal error during shutdown:', err);
@@ -74,6 +86,6 @@ export function registerShutdownHandlers(
     }
   };
 
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }

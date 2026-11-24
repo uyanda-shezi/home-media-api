@@ -64,3 +64,31 @@ describe('Graceful Shutdown & WAL Checkpoint', () => {
     await performGracefulShutdown(server, db, 1000);
   });
 });
+
+it('shares completion and awaits workers before closing SQLite under a competing writer', async t => {
+  const dir = join(process.cwd(), 'tmp-test-shutdown-sync');
+  mkdirSync(dir);
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const db = createDb(join(dir, 'state.db'));
+  const other = createDb(join(dir, 'state.db'));
+  db.exec('CREATE TABLE data (value INTEGER)');
+  other.exec('BEGIN IMMEDIATE');
+  const server = http.createServer();
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const started = performance.now();
+  try {
+    const stopping = performGracefulShutdown(server, db, 1000, () => pending);
+    assert.equal(performGracefulShutdown(server, db, 1000), stopping);
+    assert.equal(db.open, true);
+    release();
+    await stopping;
+    assert.equal(db.open, false);
+    assert.ok(performance.now() - started < 1000);
+  } finally {
+    release();
+    other.close();
+    if (db.open) db.close();
+  }
+});

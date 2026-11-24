@@ -110,8 +110,12 @@ function getHeaders(apiKey: string): Record<string, string> {
 async function fetchSeerrJson<T>(
   url: string,
   apiKey: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  syncSignal?: AbortSignal
 ): Promise<T> {
+  const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  const signal = syncSignal ? AbortSignal.any([syncSignal, timeout]) : timeout;
+
   let res: Response;
   try {
     res = await fetch(url, {
@@ -120,13 +124,26 @@ async function fetchSeerrJson<T>(
         ...getHeaders(apiKey),
         ...(options.headers as Record<string, string> | undefined),
       },
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
     throw new SeerrError(
       502,
       `Upstream Seerr service is unreachable or timed out: ${sanitizeErrorMessage(err, apiKey)}`
     );
+  }
+
+  if (syncSignal) {
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => {});
+      throw new SeerrError(res.status, 'Upstream Seerr sync read failed');
+    }
+    try {
+      return (await res.json()) as T;
+    } catch (error) {
+      const status = !signal.aborted && error instanceof SyntaxError ? 422 : 502;
+      throw new SeerrError(status, 'Upstream Seerr sync response could not be read');
+    }
   }
 
   if (res.status === 401 || res.status === 403) {
@@ -533,4 +550,15 @@ export async function declineRequest(
   });
 
   return sanitizeRequestItem(raw);
+}
+
+export function readSeerrSync(
+  baseUrl: string,
+  apiKey: string,
+  resource: 'request' | 'movie' | 'tv',
+  id: number,
+  signal: AbortSignal
+): Promise<unknown> {
+  const endpoint = `${baseUrl.replace(/\/+$/, '')}/api/v1/${resource}/${encodeURIComponent(id)}`;
+  return fetchSeerrJson(endpoint, apiKey, { redirect: 'error' }, signal);
 }
